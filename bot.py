@@ -4,14 +4,15 @@ from discord.ext import commands
 import os
 import sqlite3
 import random
-from datetime import datetime
+import math
+import re
 
 # --- KONFIGURACE ---
 TOKEN = os.getenv('TOKEN')
 WELCOME_CHANNEL_ID = 1466784809316782110
 WARN_CHANNEL_ID = 1483168781080592474
 
-# --- TABULKA HODNOSTÍ S LIMITAMY ---
+# --- TABULKA HODNOSTÍ (ID zůstávají stejná) ---
 RANKS = [
     {"name": "Private", "id": 1467194169423433738, "xp": 0, "limit": 999},
     {"name": "Deputy Corporal", "id": 1466792881800085555, "xp": 100, "limit": 10},
@@ -23,11 +24,9 @@ RANKS = [
     {"name": "⭐⭐⭐ Deputy General⭐⭐⭐", "id": 1466788653203460146, "xp": 700, "limit": 1}
 ]
 
-# --- DATABÁZE ---
 db = sqlite3.connect('military_data.db')
 cursor = db.cursor()
-cursor.execute('''CREATE TABLE IF NOT EXISTS users 
-                  (user_id INTEGER PRIMARY KEY, xp INTEGER DEFAULT 0, warns INTEGER DEFAULT 0)''')
+cursor.execute('CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, xp INTEGER DEFAULT 0, warns INTEGER DEFAULT 0)')
 db.commit()
 
 class MyBot(commands.Bot):
@@ -40,109 +39,120 @@ class MyBot(commands.Bot):
     async def setup_hook(self):
         self.add_view(RoleView())
         await self.tree.sync()
-        print("✅ MTC Systém kompletní a synchronizován.")
 
 bot = MyBot()
 
-# --- VERIFIKAČNÍ SYSTÉM (Tlačítko) ---
+# --- VERIFIKAČNÍ SYSTÉM ---
 class RoleView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="Vstoupit do armády", style=discord.ButtonStyle.green, custom_id="mtc_verify_v5")
+    def __init__(self): super().__init__(timeout=None)
+    @discord.ui.button(label="Vstoupit do armády", style=discord.ButtonStyle.green, custom_id="mtc_verify_v8")
     async def assign_rank(self, interaction: discord.Interaction, button: discord.ui.Button):
         role_private = interaction.guild.get_role(RANKS[0]['id'])
-        if role_private in interaction.user.roles:
-            return await interaction.response.send_message("⚠️ Už jsi v armádě!", ephemeral=True)
-        
+        if role_private in interaction.user.roles: return await interaction.response.send_message("⚠️ Už jsi v armádě!", ephemeral=True)
         await interaction.user.add_roles(role_private)
         cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (interaction.user.id,))
         db.commit()
-        await interaction.response.send_message(f"✅ Vítej v MTC, vojáku! Byla ti udělena hodnost Private.", ephemeral=True)
+        await interaction.response.send_message(f"✅ Vítej v MTC!", ephemeral=True)
 
-# --- POMOCNÉ FUNKCE ---
-def add_xp(user_id, amount):
-    cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
-    cursor.execute("UPDATE users SET xp = xp + ? WHERE user_id = ?", (amount, user_id))
-    db.commit()
-    cursor.execute("SELECT xp FROM users WHERE user_id = ?", (user_id,))
-    return cursor.fetchone()[0]
-
-async def check_rank_up(member, current_xp):
-    for rank in reversed(RANKS):
-        if current_xp >= rank['xp']:
-            role = member.guild.get_role(rank['id'])
-            if not role or role in member.roles: break
+# --- TAKTICKÝ MOZEK A VÝPOČTY ---
+def calculate_artillery(message_text):
+    # Hledáme čísla v textu (např. "posun o 20 metrů na 1000 metrů")
+    numbers = re.findall(r'\d+', message_text)
+    if len(numbers) >= 2:
+        offset = float(numbers[0])   # Kolik metrů mimo (např. 20)
+        distance = float(numbers[1]) # Vzdálenost k cíli (např. 1000)
+        
+        if distance > 0:
+            # Výpočet úhlu v radiánech: tan(alpha) = protilehlá / přilehlá
+            radians = math.atan(offset / distance)
+            degrees = math.degrees(radians)
+            # Často se v armádě používají miliradiány (mrad)
+            mrad = radians * 1000
             
-            if len(role.members) < rank['limit']:
-                await member.add_roles(role)
-                channel = member.guild.get_channel(WELCOME_CHANNEL_ID)
-                if channel:
-                    await channel.send(f"🎖️ **POVÝŠENÍ!** {member.mention} získal hodnost **{rank['name']}**!")
-                break
+            return (f"🎯 **BALISTICKÝ VÝPOČET:**\n"
+                    f"Pro korekci o **{offset}m** na vzdálenost **{distance}m**:\n"
+                    f"🔹 Posunout dělo o: **{degrees:.2f}°**\n"
+                    f"🔹 Korekce v miliradiánech: **{mrad:.1f} mrad**")
+    return None
 
-# --- SLASH PŘÍKAZY ---
+def get_tactical_advice(content):
+    content = content.lower()
+    if "cqb" in content or "budov" in content:
+        return "🏠 **TACTICAL ADVICE (CQB):** Vždy pracujte ve dvojicích. První (Pointman) čistí rohy, druhý kryje záda. Než vstoupíte, použijte flashbang. Pamatujte: 'Slow is smooth, smooth is fast'."
+    if "formace" in content or "formation" in content:
+        return "🛡️ **TACTICAL ADVICE (FORMACE):** \n- **Line:** Max palebná síla dopředu.\n- **Column:** Rychlý přesun, slabé boky.\n- **Vee:** Dobrá ochrana boků a silný úder."
+    if "recon" in content or "pruzkum" in content:
+        return "🔭 **TACTICAL ADVICE (RECON):** Buď neviditelný. Používej vyvýšený terén, nekřižuj otevřená pole. Tvým úkolem je hlásit pozice, ne vyvolat přestřelku."
+    if "artylerie" in content or "delo" in content:
+        return "💥 **DĚLOSTŘELECTVO:** Pro přesný výpočet mi napiš: 'posun [metry] na vzdálenost [metry]'. Vždy počítej s větrem a nadmořskou výškou!"
+    return None
 
-@bot.tree.command(name="profile", description="Zobrazí tvůj profil")
+# --- ON MESSAGE (LOGIKA AI A XP) ---
+@bot.event
+async def on_message(message):
+    if message.author.bot: return
+
+    # REAKCE NA TAKTIKU NEBO VÝPOČET
+    if bot.user.mentioned_in(message):
+        async with message.channel.typing():
+            # 1. Zkusíme dělostřelecký výpočet
+            art_calc = calculate_artillery(message.content)
+            # 2. Zkusíme taktickou radu
+            tac_advice = get_tactical_advice(message.content)
+            
+            if art_calc:
+                await message.reply(art_calc)
+            elif tac_advice:
+                await message.reply(tac_advice)
+            else:
+                await message.reply("Zdravím, vojáku! Pokud chceš taktickou radu (CQB, formace, recon) nebo balistický výpočet, zeptej se mě přímo. 🫡")
+
+    # XP SYSTÉM (zůstává stejný)
+    cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (message.author.id,))
+    cursor.execute("UPDATE users SET xp = xp + ? WHERE user_id = ?", (random.randint(1, 3), message.author.id))
+    db.commit()
+    await bot.process_commands(message)
+
+# --- SLASH COMMANDS (Profile, Warn, Meeting...) ---
+@bot.tree.command(name="profile", description="Vojenská karta")
 async def profile(interaction: discord.Interaction, member: discord.Member = None):
     target = member or interaction.user
     cursor.execute("SELECT xp, warns FROM users WHERE user_id = ?", (target.id,))
     data = cursor.fetchone()
-    xp = data[0] if data else 0
-    warns = data[1] if data else 0
+    xp, warns = (data[0], data[1]) if data else (0, 0)
     
+    current_rank = "Rekrut"
+    for rank in RANKS:
+        role = target.guild.get_role(rank['id'])
+        if role and role in target.roles: current_rank = rank['name']
+
     embed = discord.Embed(title=f"🪖 Profil: {target.display_name}", color=discord.Color.dark_green())
-    embed.add_field(name="XP", value=f"⭐ {xp}", inline=True)
+    embed.add_field(name="Hodnost", value=f"🎖️ {current_rank}", inline=False)
+    embed.add_field(name="Zkušenosti", value=f"⭐ {xp} XP", inline=True)
     embed.add_field(name="Warny", value=f"⚠️ {warns}", inline=True)
     await interaction.response.send_message(embed=embed)
 
-@bot.tree.command(name="warn", description="Udělit varování")
+@bot.tree.command(name="warn")
 @app_commands.checks.has_permissions(manage_messages=True)
 async def warn(interaction: discord.Interaction, member: discord.Member, duvod: str):
     cursor.execute("UPDATE users SET warns = warns + 1 WHERE user_id = ?", (member.id,))
     db.commit()
-    
-    warn_channel = bot.get_channel(WARN_CHANNEL_ID)
-    embed = discord.Embed(title="⚠️ DISCIPLINÁRNÍ TREST", color=discord.Color.red())
-    embed.add_field(name="Voják", value=member.mention, inline=True)
-    embed.add_field(name="Důvod", value=duvod, inline=True)
-    embed.set_footer(text=f"Udělil: {interaction.user.display_name}")
-    
-    if warn_channel: await warn_channel.send(embed=embed)
-    await interaction.response.send_message(f"✅ Varování pro {member.mention} uloženo.", ephemeral=True)
+    channel = bot.get_channel(WARN_CHANNEL_ID)
+    if channel: await channel.send(embed=discord.Embed(title="⚠️ WARN", description=f"{member.mention} - {duvod}", color=discord.Color.red()))
+    await interaction.response.send_message("✅ Warn uložen.", ephemeral=True)
 
-@bot.tree.command(name="meeting", description="Svolat nástup")
+@bot.tree.command(name="meeting")
 @app_commands.checks.has_permissions(administrator=True)
 async def meeting(interaction: discord.Interaction, cas: str):
     await interaction.response.send_message(f"📢 **@everyone POZOR!** Nástup v **{cas}**!", allowed_mentions=discord.AllowedMentions(everyone=True))
 
-@bot.tree.command(name="setup_nabor", description="Vytvořit náborový panel")
+@bot.tree.command(name="setup_nabor")
 @app_commands.checks.has_permissions(administrator=True)
 async def setup_nabor(interaction: discord.Interaction):
-    embed = discord.Embed(title="Nábor do MTC", description="Klikni na tlačítko pro vstup!", color=discord.Color.green())
-    await interaction.channel.send(embed=embed, view=RoleView())
-    await interaction.response.send_message("Panel odeslán.", ephemeral=True)
-
-@bot.tree.command(name="positions", description="Obsazenost hodností")
-async def positions(interaction: discord.Interaction):
-    embed = discord.Embed(title="📊 Obsazenost pozic", color=discord.Color.blue())
-    for rank in RANKS[1:]:
-        role = interaction.guild.get_role(rank['id'])
-        count = len(role.members) if role else 0
-        embed.add_field(name=rank['name'], value=f"`{count}/{rank['limit']}`", inline=True)
-    await interaction.response.send_message(embed=embed)
-
-# --- UDÁLOSTI ---
-@bot.event
-async def on_message(message):
-    if message.author.bot: return
-    new_xp = add_xp(message.author.id, random.randint(1, 3))
-    if new_xp % 10 == 0: await check_rank_up(message.author, new_xp)
-    await bot.process_commands(message)
+    await interaction.channel.send(embed=discord.Embed(title="Nábor MTC", description="Klikni pro vstup!", color=discord.Color.green()), view=RoleView())
+    await interaction.response.send_message("Panel vytvořen.", ephemeral=True)
 
 @bot.event
-async def on_member_join(member):
-    channel = bot.get_channel(WELCOME_CHANNEL_ID)
-    if channel: await channel.send(f"🎖️ Nováček {member.mention} dorazil na základnu!")
+async def on_ready(): print(f'--- {bot.user.name} READY ---')
 
 bot.run(TOKEN)

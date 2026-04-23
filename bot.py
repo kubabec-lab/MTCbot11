@@ -6,14 +6,14 @@ from datetime import datetime
 import random
 
 # --- NASTAVENÍ ---
-TOKEN = 'TVUJ_TOKEN_ZDE'  # Sem dej svůj nový Token v uvozovkách
-WARN_CHANNEL_ID = 123456789  # Sem dej ID tvého kanálu #warny
+TOKEN = os.getenv('TOKEN')
+WARN_CHANNEL_ID = int(os.getenv('WARN_CHANNEL_ID', '1483168781080592474'))  # Sem dej ID tvého kanálu #warny
 
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
-bot = commands.Bot(command_prefix='!', intents=intents)
+bot = commands.Bot(command_prefix='/', intents=intents)
 
 # --- VERIFIKAČNÍ SYSTÉM (Tlačítko na role) ---
 class RoleView(View):

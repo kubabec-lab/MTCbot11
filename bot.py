@@ -1,3 +1,4 @@
+import os
 import discord
 from discord.ext import commands
 from discord.ui import Button, View
@@ -89,5 +90,5 @@ async def warn(ctx, member: discord.Member, *, duvod="Neuveden"):
 async def meeting(ctx, cas: str):
     await ctx.send(f"🎖️ **@everyone POZOR!** Nástup v **{cas}**!")
 
-# --- SPUŠTĚNÍ ---
-bot.run('MTQ5NjgzODEzODY4NzkxNDAxNQ.GgCjSV.1weQrNEA2g-f6_5jTer-C9iU0orHk4NI3KQKg4')
+TOKEN = os.getenv('TOKEN')
+WARN_CHANNEL_ID = int(os.getenv('WARN_CHANNEL_ID', '0'))

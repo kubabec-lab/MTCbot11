@@ -92,3 +92,5 @@ async def meeting(ctx, cas: str):
 
 TOKEN = os.getenv('TOKEN')
 WARN_CHANNEL_ID = int(os.getenv('WARN_CHANNEL_ID', '0'))
+
+bot.run(TOKEN)

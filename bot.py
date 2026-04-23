@@ -1,96 +1,121 @@
-import os
 import discord
+from discord import app_commands
 from discord.ext import commands
 from discord.ui import Button, View
 from datetime import datetime
 import random
+import os
 
-# --- NASTAVENÍ ---
+# --- KONFIGURACE (ID vložená přímo) ---
 TOKEN = os.getenv('TOKEN')
-WARN_CHANNEL_ID = int(os.getenv('WARN_CHANNEL_ID', '1483168781080592474'))  # Sem dej ID tvého kanálu #warny
+WELCOME_CHANNEL_ID = 1466784809316782110
+WARN_CHANNEL_ID = 1483168781080592474
+ROLE_PRIVATE_ID = 1467194169423433738
+ROLE_DEPUTY_ID = 1466792881800085555
 
-intents = discord.Intents.default()
-intents.message_content = True
-intents.members = True
+class MyBot(commands.Bot):
+    def __init__(self):
+        intents = discord.Intents.default()
+        intents.message_content = True
+        intents.members = True
+        super().__init__(command_prefix="!", intents=intents)
 
-bot = commands.Bot(command_prefix='/', intents=intents)
+    async def setup_hook(self):
+        # Tlačítko bude fungovat i po restartu
+        self.add_view(RoleView())
+        # Synchronizace Slash příkazů (může trvat chvíli, než se objeví v Discordu)
+        await self.tree.sync()
+        print("✅ Slash commandy synchronizovány.")
+
+bot = MyBot()
 
 # --- VERIFIKAČNÍ SYSTÉM (Tlačítko na role) ---
 class RoleView(View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="Vstoupit do armády (Získat hodnost)", style=discord.ButtonStyle.green, custom_id="assign_rank")
+    @discord.ui.button(label="Vstoupit do armády", style=discord.ButtonStyle.green, custom_id="mtc_verify_v2")
     async def assign_rank(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Názvy rolí - musí být PŘESNĚ jako na Discordu
-        role_private_name = "Private"
-        role_deputy_name = "Deputy Corporal"
-        
-        role_private = discord.utils.get(interaction.guild.roles, name=role_private_name)
-        role_deputy = discord.utils.get(interaction.guild.roles, name=role_deputy_name)
+        role_private = interaction.guild.get_role(ROLE_PRIVATE_ID)
+        role_deputy = interaction.guild.get_role(ROLE_DEPUTY_ID)
 
-        if not role_private or not role_deputy:
-            await interaction.response.send_message("Chyba: Role 'Private' nebo 'Deputy Corporal' neexistují!", ephemeral=True)
-            return
+        if not role_private:
+            return await interaction.response.send_message("❌ Chyba: Role 'Private' nebyla nalezena (ID je špatně).", ephemeral=True)
+
+        # Kontrola, zda uživatel už roli nemá
+        if role_private in interaction.user.roles:
+            return await interaction.response.send_message("⚠️ Už jsi členem armády!", ephemeral=True)
 
         roles_to_add = [role_private]
-        msg_text = f"Byl jsi přijat! Byla ti udělena hodnost **{role_private_name}**."
+        msg = f"✅ Vítej v MTC! Byla ti udělena hodnost **{role_private.name}**."
 
-        # Šance 50/50 na Deputy Corporal
-        if random.choice([True, False]):
+        # Šance 20 % na Deputy Corporal
+        if random.random() < 0.20 and role_deputy:
             roles_to_add.append(role_deputy)
-            msg_text += f" Navíc jsi byl jmenován do funkce **{role_deputy_name}**! 🎖️"
+            msg += f"\n🎖️ Navíc jsi byl za zásluhy jmenován **{role_deputy.name}**!"
 
         try:
             await interaction.user.add_roles(*roles_to_add)
-            await interaction.response.send_message(msg_text, ephemeral=True)
+            await interaction.response.send_message(msg, ephemeral=True)
         except discord.Forbidden:
-            await interaction.response.send_message("Chyba: Bot nemá práva spravovat role! (Posuň jeho roli v nastavení výš)", ephemeral=True)
+            await interaction.response.send_message("❌ Nemám práva na přidávání rolí! Přesuň roli bota v nastavení serveru úplně nahoru.", ephemeral=True)
 
 # --- UDÁLOSTI ---
 @bot.event
 async def on_ready():
-    bot.add_view(RoleView()) # Aby tlačítko fungovalo i po restartu
-    print(f'MTC Bot připraven! Přihlášen jako {bot.user}')
+    print(f'--- {bot.user.name} je ONLINE a připraven ---')
 
 @bot.event
 async def on_member_join(member):
-    channel = discord.utils.get(member.guild.text_channels, name="chat")
+    channel = bot.get_channel(WELCOME_CHANNEL_ID)
     if channel:
-        await channel.send(f"Pozor! Voják {member.mention} právě dorazil na základnu. Vítej!")
+        embed = discord.Embed(
+            title="Nový voják na základně!",
+            description=f"🎖️ Pozor! {member.mention} dorazil k jednotce MTC. Vítej!",
+            color=discord.Color.blue()
+        )
+        await channel.send(embed=embed)
 
-# --- PŘÍKAZY ---
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def setup_roles(ctx):
+# --- SLASH PŘÍKAZY (Menu pod /) ---
+
+@bot.tree.command(name="setup_nabor", description="Vytvoří náborovou zprávu s tlačítkem")
+@app_commands.checks.has_permissions(administrator=True)
+async def setup_nabor(interaction: discord.Interaction):
     embed = discord.Embed(
-        title="Nábor do MTC", 
-        description="Kliknutím na tlačítko níže se zapíšeš do aktivní služby.\n\n"
-                    "• Každý obdrží hodnost **Private**.\n"
-                    "• Můžeš být náhodně jmenován **Deputy Corporal**!", 
+        title="Nábor do Military Teamu",
+        description="Kliknutím na tlačítko níže podepíšeš svůj kontrakt a vstoupíš do MTC.\n\n"
+                    "🔹 Získáš základní vybavení a hodnost.\n"
+                    "🔹 Špičkoví rekruti mohou být povýšeni rovnou po vstupu.",
         color=discord.Color.dark_green()
     )
-    await ctx.send(embed=embed, view=RoleView())
+    await interaction.response.send_message("Generuji náborový panel...", ephemeral=True)
+    await interaction.channel.send(embed=embed, view=RoleView())
 
-@bot.command()
-@commands.has_permissions(manage_messages=True)
-async def warn(ctx, member: discord.Member, *, duvod="Neuveden"):
+@bot.tree.command(name="warn", description="Udělá varování členovi")
+@app_commands.checks.has_permissions(manage_messages=True)
+async def warn(interaction: discord.Interaction, member: discord.Member, duvod: str):
     warn_channel = bot.get_channel(WARN_CHANNEL_ID)
-    embed = discord.Embed(title="⚠️ VAROVÁNÍ", color=discord.Color.red())
-    embed.add_field(name="Uživatel:", value=member.mention, inline=False)
+    if not warn_channel:
+        return await interaction.response.send_message("❌ Kanál pro varování nebyl nalezen!", ephemeral=True)
+
+    embed = discord.Embed(title="⚠️ DISCIPLINÁRNÍ TREST", color=discord.Color.red())
+    embed.add_field(name="Potrestaný:", value=member.mention, inline=False)
     embed.add_field(name="Důvod:", value=duvod, inline=False)
-    embed.add_field(name="Udělil:", value=ctx.author.mention, inline=False)
-    embed.set_footer(text=f"Datum: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
+    embed.add_field(name="Udělil:", value=interaction.user.mention, inline=False)
+    embed.set_timestamp()
+    embed.set_footer(text="MTC Vojenská Policie")
     
-    if warn_channel:
-        await warn_channel.send(embed=embed)
-        await ctx.send(f"Voják {member.mention} byl nahlášen.")
+    await warn_channel.send(embed=embed)
+    await interaction.response.send_message(f"✅ Varování pro {member.mention} bylo zaznamenáno.", ephemeral=True)
 
-@bot.command()
-async def meeting(ctx, cas: str):
-    await ctx.send(f"🎖️ **@everyone POZOR!** Nástup v **{cas}**!")
+@bot.tree.command(name="meeting", description="Svolá nástup všech jednotek")
+@app_commands.checks.has_permissions(administrator=True)
+async def meeting(interaction: discord.Interaction, cas: str):
+    # Příkaz odpoví a zároveň pošle zprávu s @everyone
+    await interaction.response.send_message(f"📢 **@everyone POZOR!** Nástup v **{cas}**! Všichni na značky!", allowed_mentions=discord.AllowedMentions(everyone=True))
 
-TOKEN = os.getenv('TOKEN')
-WARN_CHANNEL_ID = int(os.getenv('WARN_CHANNEL_ID', '0'))
-
-bot.run(TOKEN)
+# --- SPUŠTĚNÍ ---
+if TOKEN:
+    bot.run(TOKEN)
+else:
+    print("❌ CHYBA: Chybí TOKEN v Railway Variables!")
